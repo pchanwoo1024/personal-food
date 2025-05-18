@@ -23,7 +23,7 @@ symptom_options = ["눈떨림","피로","두통","근육경련","탈모","불면
 symptoms        = st.multiselect("현재 증상", symptom_options)
 
 # 2) Load and cache menu data
-@st.experimental_memo
+@st.cache_data
 def load_menu():
     months = ["202503","202504","202505"]
     base_url = "https://school.koreacharts.com/school/meals/B000013534/{}.html"
@@ -33,7 +33,6 @@ def load_menu():
         try:
             r = requests.get(url, timeout=5)
             soup = BeautifulSoup(r.text, "html.parser")
-            # parse table rows
             for tr in soup.select("table tbody tr"):
                 tds = tr.select("td")
                 if len(tds) < 2:
