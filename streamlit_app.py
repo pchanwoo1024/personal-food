@@ -34,38 +34,47 @@ symptom_options = [
 ]
 symptoms = st.multiselect("현재 증상", symptom_options)
 
-# 2) 대전고 공식 게시판에서 급식 메뉴 파싱 (fallback 포함)
+# 2) 대전고 공식 게시판에서 급식 메뉴 파싱
 @st.cache_data
 def load_menu():
-    url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
+    base_list_url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
     dishes = set()
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get(base_list_url, timeout=5)
         soup = BeautifulSoup(r.text, "html.parser")
-        rows = soup.select("table.tableList tbody tr, table.boardList tbody tr")
-        for row in rows:
-            cols = row.select("td")
-            if len(cols) < 2:
+        # 게시판 리스트에서 중식 링크만 추출
+        for tr in soup.select("table.tableList tbody tr, table.boardList tbody tr"):
+            tds = tr.select("td")
+            if len(tds) < 2:
                 continue
-            title = cols[1].get_text(strip=True)
-            if "중식" not in title:
+            a = tds[1].find('a')
+            if not a or '중식' not in a.get_text():
                 continue
-            content = title.split(']')[-1] if ']' in title else title.split('중식')[-1]
-            items = [i.strip() for i in re.split('[,·]', content) if i.strip()]
-            for item in items:
-                clean = re.sub(r"\([^)]*\)", "", item).strip()
-                if re.fullmatch(r"[가-힣]{2,10}", clean):
-                    dishes.add(clean)
+            href = a['href']
+            detail_url = href if href.startswith('http') else f"https://djhs.djsch.kr{href}"
+            try:
+                dr = requests.get(detail_url, timeout=5)
+                dsoup = BeautifulSoup(dr.text, "html.parser")
+                # 상세 내용 영역 탐색
+                content = dsoup.select_one("div.board_conts, div.boardContents, td.board_txt")
+                text = content.get_text(separator=",") if content else ''
+                # 콤마·중점 구분
+                for part in re.split('[,·]', text):
+                    item = re.sub(r"\([^)]*\)", "", part).strip()
+                    # 순수 한글, 메뉴명 길이 제한
+                    if re.fullmatch(r"[가-힣 ]{2,10}", item):
+                        dishes.add(item)
+            except:
+                continue
     except:
         pass
+    # fallback 기본 메뉴 (실패 시)
     if not dishes:
-        # fallback to default menu
-        fallback = [
+        return [
             "현미밥","백미밥","김치찌개","된장찌개","미역국",
             "불고기","제육볶음","잡채","두부조림","계란찜",
             "카레라이스","깍두기","생선구이","샐러드","닭강정"
         ]
-        return fallback
     return sorted(dishes)
 
 menu_names = load_menu()
