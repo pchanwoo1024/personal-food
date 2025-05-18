@@ -1,117 +1,120 @@
 import streamlit as st
-import itertools
+import random
+import requests
 import numpy as np
+from itertools import combinations
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
-st.title("🍽️ AI 기반 개인 맞춤 영양 식단 추천 (다양한 패턴 + ML)")
+st.title("🍽️ AI 기반 개인 맞춤 영양 식단 추천")
 
 # 1) 사용자 입력
-name      = st.text_input("이름")
-sex       = st.selectbox("성별", ["M", "F"])
-age       = st.slider("나이", 10, 80, 18)
-height    = st.slider("키 (cm)", 140, 200, 170)
-weight    = st.slider("몸무게 (kg)", 40, 120, 60)
-activity  = st.slider("활동량 (1.0~5.0)", 1.0, 5.0, 3.0, step=0.1)
-allergies = st.multiselect("알레르기", ["밀","대두","우유","달걀","닭고기","돼지고기","생선","땅콩","메밀"])
-symptoms  = st.multiselect("현재 증상", ["피로","두통","불면증","집중력저하"])
+name    = st.text_input("이름")
+sex     = st.selectbox("성별", ["M", "F"])
+age     = st.slider("나이", 10, 80, 18)
+height  = st.slider("키 (cm)", 140, 200, 170)
+weight  = st.slider("몸무게 (kg)", 40, 120, 60)
+activity= st.slider("활동량 (1.0~5.0)", 1.0, 5.0, 3.0, step=0.1)
+allergy_options  = ["밀","대두","우유","달걀","닭고기","돼지고기","생선","땅콩","메밀"]
+allergies        = st.multiselect("알레르기 (복수 선택)", allergy_options)
+symptom_options  = ["눈떨림","피로","두통","근육경련","탈모","불면증","집중력저하","손발저림"]
+symptoms         = st.multiselect("현재 증상", symptom_options)
 
 if st.button("식단 추천 실행"):
-    # 2) BMR·TDEE 계산
-    bmi = weight / ((height/100)**2)
+    # 2) BMI·BMR·TDEE 계산
+    bmi           = weight / ((height/100)**2)
+    target_weight = 21.0 * ((height/100)**2)
+    weeks_needed  = abs((target_weight - weight) * 7700 / 500) / 7
     if sex == "M":
-        bmr = 10*weight + 6.25*height - 5*age + 5
+        bmr = 10*weight + 6.25*height -5*age +5
     else:
-        bmr = 10*weight + 6.25*height - 5*age - 161
-    tdee = bmr * (1.2 + (activity - 1) * 0.15)
-    per_meal = tdee / 3
+        bmr = 10*weight + 6.25*height -5*age -161
+    activity_factor = 1.2 + (activity-1)*0.15
+    tdee = bmr * activity_factor
 
-    # 3) 동적 매크로 비율 (기본 50:25:25 + 활동량·증상 반영)
-    carb_r, prot_r, fat_r = 0.5, 0.25, 0.25
-    if activity >= 4.0:
-        prot_r += 0.05; carb_r -= 0.025; fat_r -= 0.025
-    if "피로" in symptoms:
-        carb_r += 0.05; fat_r -= 0.05
-    if "불면증" in symptoms:
-        fat_r += 0.05; carb_r -= 0.05
-    s = carb_r + prot_r + fat_r
-    carb_r, prot_r, fat_r = carb_r/s, prot_r/s, fat_r/s
-
-    # 4) 음식 카테고리 정의
-    Grains   = [{"name":"백미밥","kcal":300,"carb":65,"protein":4,"fat":1},
-                {"name":"현미밥","kcal":250,"carb":55,"protein":5,"fat":2}]
-    Stews    = [{"name":"김치찌개","kcal":150,"carb":5,"protein":6,"fat":10},
-                {"name":"된장찌개","kcal":180,"carb":8,"protein":7,"fat":12}]
-    Proteins = [{"name":"닭가슴살","kcal":200,"carb":0,"protein":40,"fat":2},
-                {"name":"연어구이","kcal":250,"carb":0,"protein":30,"fat":12}]
-    Sides    = [{"name":"두부조림","kcal":200,"carb":8,"protein":12,"fat":12},
-                {"name":"계란찜","kcal":120,"carb":2,"protein":10,"fat":8},
-                {"name":"샐러드","kcal":150,"carb":10,"protein":5,"fat":10}]
-    Fruits   = [{"name":"사과","kcal":80,"carb":20,"protein":0,"fat":0},
-                {"name":"바나나","kcal":100,"carb":25,"protein":1,"fat":0}]
-
-    # 5) 알레르기 필터링
-    def filt(items):
-        return [m for m in items if not any(a in m["name"] for a in allergies)]
-    Grains, Stews, Proteins, Sides, Fruits = map(filt, (Grains, Stews, Proteins, Sides, Fruits))
-    if not (Grains and Stews and Proteins and Sides):
-        st.error("알레르기 필터링 후 충분한 음식이 남지 않았습니다.")
+    # 3) Fetch Korean meals
+    try:
+        resp = requests.get("https://www.themealdb.com/api/json/v1/1/filter.php?a=Korean", timeout=5)
+        meals_data = resp.json().get("meals") or []
+    except:
+        meals_data = []
+    cat_nut = {
+        "Jjigae": {"suffix":"찌개","kcal":180,"carb":8,"protein":7,"fat":12},
+        "Guk":    {"suffix":"국","kcal":80,"carb":5,"protein":3,"fat":2},
+        "Bulgogi":{"name":"불고기","kcal":300,"carb":10,"protein":25,"fat":15},
+        "Japchae":{"name":"잡채","kcal":280,"carb":40,"protein":7,"fat":12},
+        "Bokkeum":{"suffix":"볶음","kcal":350,"carb":15,"protein":20,"fat":25},
+        "Curry":  {"suffix":"카레","kcal":450,"carb":60,"protein":10,"fat":15},
+        "Dubu":   {"suffix":"두부","kcal":200,"carb":8,"protein":12,"fat":12},
+        "Gyeran": {"suffix":"계란찜","kcal":120,"carb":2,"protein":10,"fat":8},
+        "Salad":  {"name":"샐러드","kcal":150,"carb":10,"protein":5,"fat":10}
+    }
+    available = []
+    for m in meals_data:
+        meal_en = m.get("strMeal","")
+        for key,nut in cat_nut.items():
+            if key in meal_en:
+                if "name" in nut:
+                    name_kr = nut["name"]
+                else:
+                    prefix = meal_en.replace(key,"").strip()
+                    name_kr = prefix + nut["suffix"]
+                available.append({"name":name_kr,
+                                  "kcal":nut["kcal"],
+                                  "carb":nut["carb"],
+                                  "protein":nut["protein"],
+                                  "fat":nut["fat"]})
+                break
+    if not available:
+        st.error("한국 음식 정보를 가져오지 못했습니다.")
         st.stop()
 
-    # 6) 패턴별 조합 생성
-    patterns = [
-        ("Grains", "Stews", "Sides"),
-        ("Grains", "Proteins", "Sides"),
-        ("Grains", "Sides", "Fruits")
-    ]
-    cats = {"Grains":Grains, "Stews":Stews, "Proteins":Proteins, "Sides":Sides, "Fruits":Fruits}
-    combos = []
-    for pat in patterns:
-        for combo in itertools.product(*(cats[p] for p in pat)):
-            kc = sum(x["kcal"]    for x in combo)
-            cb = sum(x["carb"]    for x in combo)
-            pr = sum(x["protein"] for x in combo)
-            ft = sum(x["fat"]     for x in combo)
-            feats = [bmi, age, activity, kc, cb, pr, ft]
-            combos.append({"combo":combo, "feat":feats, "kcal":kc})
+    # 4) allergy filter
+    meals = random.sample(available, min(7,len(available)))
+    filtered = [m for m in meals if not any(a in m["name"] for a in allergies)] if allergies else meals
+    if not filtered:
+        st.warning("알레르기로 추천 불가")
+        st.stop()
 
-    # 7) 라벨링 & 학습 데이터 구성
-    X_train, y_train = [], []
-    for c in combos:
-        kc, cb, pr, ft = c["feat"][3:]
-        pr_ratio = pr / (cb + pr + ft + 1e-6)
-        score = 0.6 * (1 - abs(kc - per_meal) / per_meal) + 0.4 * (1 - abs(pr_ratio - prot_r))
-        X_train.append(c["feat"])
-        y_train.append(1 if score > 0.75 else 0)
+    # 5) combos of 3
+    combos = list(combinations(filtered,3))
+    X = []; y=[]
+    for combo in combos:
+        kcal=sum(m["kcal"] for m in combo)
+        carb=sum(m["carb"] for m in combo)
+        prot=sum(m["protein"] for m in combo)
+        fat=sum(m["fat"] for m in combo)
+        X.append([bmi,age,activity,kcal,carb,prot,fat])
+        total_macros=carb+prot+fat+1e-6
+        prot_ratio=prot/total_macros
+        ideal_prot=0.2+(activity-1)*0.05
+        p_score=1-abs(prot_ratio-ideal_prot)
+        kcal_score=1-abs(kcal-tdee*0.33)/(tdee*0.33)
+        score=0.6*kcal_score+0.4*p_score
+        y.append(1 if score>0.75 else 0)
+    clf=Pipeline([("scaler",StandardScaler()),
+                  ("model",RandomForestClassifier(n_estimators=100,random_state=42))])
+    clf.fit(X,y)
+    probs=[clf.predict_proba([feat])[0][1] for feat in X]
+    ranked=sorted(zip(combos,probs),key=lambda x:-x[1])[:3]
+    times=["07:30","12:30","18:30"]
 
-    # 8) 모델 학습
-    clf = Pipeline([
-        ("scaler", StandardScaler()),
-        ("model", RandomForestClassifier(n_estimators=100, random_state=42))
-    ])
-    clf.fit(X_train, y_train)
-    classes = clf.named_steps["model"].classes_
+    # nutrient schedules
+    symptom_map={"눈떨림":[("10:00","마그네슘 300mg")],"피로":[("09:00","비타민 B2 1.4mg")]}
+    age_map=[]
+    if age<20: age_map=[("08:00","칼슘 500mg"),("20:00","비타민 D 10µg")]
+    elif age<50: age_map=[("09:00","비타민 D 10µg")]
+    else: age_map=[("08:00","칼슘 500mg"),("21:00","비타민 D 20µg")]
 
-    def get_prob(feat):
-        proba = clf.predict_proba([feat])[0]
-        return proba[list(classes).index(1)] if 1 in classes else 0.0
-
-    # 9) 추천 우선순위 산정 (확률 내림차순 + 칼로리 오차 오름차순)
-    ranked = []
-    for c in combos:
-        p   = get_prob(c["feat"])
-        err = abs(c["kcal"] - per_meal)
-        ranked.append((p, err, c))
-    ranked.sort(key=lambda x: (-x[0], x[1]))
-
-    # 10) 최종 3개 출력
-    plan = ranked[:3]
-    times = ["07:30 아침", "12:30 점심", "18:30 저녁"]
-
-    st.markdown(f"**TDEE:** {tdee:.0f} kcal  |  **매크로:** {carb_r:.2f}/{prot_r:.2f}/{fat_r:.2f}")
-    st.markdown("### 🍽️ 하루 식단 계획")
-    for (p, err, c), t in zip(plan, times):
-        names = " + ".join(m["name"] for m in c["combo"])
-        st.write(f"{t} → **{names}** ({c['kcal']} kcal, 확률 {p:.2f}, 오차 {err:.0f} kcal)")
-        st.write(f"   - 탄:{c['feat'][4]}g 단:{c['feat'][5]}g 지:{c['feat'][6]}g")
+    # output
+    st.subheader(f"{name}님 식단")
+    for (combo,prob),t in zip(ranked,times):
+        items=" + ".join(m["name"] for m in combo)
+        kcal_sum=sum(m["kcal"] for m in combo)
+        st.write(f"{t} → {items} ({kcal_sum} kcal, 적합도 {prob:.2f})")
+    st.markdown("### 영양소 섭취 일정")
+    for s in symptoms:
+        for t,i in symptom_map.get(s,[]): st.write(f"{t} → {i}")
+    st.markdown("### 연령별 권장")
+    for t,i in age_map: st.write(f"{t} → {i}")
