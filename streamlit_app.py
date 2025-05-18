@@ -40,11 +40,17 @@ symptoms = st.multiselect("현재 증상", symptom_options)
 @st.cache_data
 def load_menu():
     dishes = set()
-    # HWP 파싱
+    # 1) HWP 파싱 (CP949/UTF-16LE 시도)
     for path in glob.glob("*.hwp"):
         try:
             raw = open(path, 'rb').read()
-            text = raw.decode('utf-8', errors='ignore')
+            try:
+                text = raw.decode('utf-16le', errors='ignore')
+            except:
+                try:
+                    text = raw.decode('cp949', errors='ignore')
+                except:
+                    continue
             items = re.findall(r'[가-힣]{2,10}', text)
             for item in items:
                 if item in ['급식','중식','조식','석식','메뉴','식단','학년도','월','식단표']:
@@ -54,7 +60,7 @@ def load_menu():
             continue
     if dishes:
         return sorted(dishes)
-    # 웹 파싱
+    # 2) 웹 파싱
     try:
         url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
         session = requests.Session()
@@ -74,10 +80,10 @@ def load_menu():
                 if re.fullmatch(r'[가-힣 ]{2,15}', clean):
                     dishes.add(clean)
     except Exception as e:
-        st.warning(f"급식 메뉴를 웹에서 불러오지 못했습니다: {e}")
+        st.warning(f"웹에서 급식 메뉴를 불러오지 못했습니다: {e}")
     return sorted(dishes)
 
-menu_names = load_menu()
+menu_names = load_menu()()
 if not menu_names:
     st.error("급식 메뉴를 불러오지 못했습니다. HWP 파일 또는 네트워크를 확인해주세요.")
     st.stop()
