@@ -36,54 +36,23 @@ symptom_options = [
 ]
 symptoms = st.multiselect("현재 증상", symptom_options)
 
-# 메뉴 로드: HWP 파일 우선, 없다면 웹 파싱
+# 메뉴 로드: 사전 생성된 JSON 파일에서 불러오기
+import json
 @st.cache_data
 def load_menu():
-    dishes = set()
-    # 1) HWP 파싱 (CP949/UTF-16LE 시도)
-    for path in glob.glob("/mnt/data/*.hwp"):
-        try:
-            raw = open(path, 'rb').read()
-            try:
-                text = raw.decode('utf-16le', errors='ignore')
-            except:
-                try:
-                    text = raw.decode('cp949', errors='ignore')
-                except:
-                    continue
-            items = re.findall(r'[가-힣]{2,10}', text)
-            for item in items:
-                if item in ['급식','중식','조식','석식','메뉴','식단','학년도','월','식단표']:
-                    continue
-                dishes.add(item)
-        except:
-            continue
-    if dishes:
-        return sorted(dishes)
-    # 2) 웹 파싱
     try:
-        url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
-        session = requests.Session()
-        session.headers.update({'User-Agent':'Mozilla/5.0'})
-        res = session.get(url, timeout=10)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for td in soup.select('table.boardList tbody tr td.title, table.tableList tbody tr td.title'):
-            text = td.get_text(strip=True)
-            if '중식' not in text:
-                continue
-            parts = text.split(']')
-            menu_str = parts[-1] if len(parts) > 1 else text
-            items = [itm.strip() for itm in menu_str.split(',') if itm.strip()]
-            for item in items:
-                clean = re.sub(r"\([^)]*\)", '', item).strip()
-                if re.fullmatch(r'[가-힣 ]{2,15}', clean):
-                    dishes.add(clean)
+        with open('menus.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            # data should be a list of menu names
+            return sorted(set(data))
+    except FileNotFoundError:
+        st.error("menus.json 파일이 없습니다. 리포지토리에 급식 메뉴 데이터 파일을 추가해주세요.")
+        st.stop()
     except Exception as e:
-        st.warning(f"웹에서 급식 메뉴를 불러오지 못했습니다: {e}")
-    return sorted(dishes)
+        st.error(f"menus.json 로드 오류: {e}")
+        st.stop()
 
-menu_names = load_menu()
+menu_names = load_menu()()
 if not menu_names:
     st.error("급식 메뉴를 불러오지 못했습니다. HWP 파일 또는 네트워크를 확인해주세요.")
     st.stop()
