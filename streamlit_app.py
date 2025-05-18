@@ -34,7 +34,7 @@ symptom_options = [
 ]
 symptoms = st.multiselect("현재 증상", symptom_options)
 
-# 2) 대전고 공식 게시판에서 급식 메뉴 파싱
+# 2) 대전고 공식 게시판에서 급식 메뉴 파싱 (fallback 포함)
 @st.cache_data
 def load_menu():
     url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
@@ -47,29 +47,28 @@ def load_menu():
             cols = row.select("td")
             if len(cols) < 2:
                 continue
-            cell = cols[1]
-            title = cell.get_text(strip=True)
-            # 메뉴 정보를 포함하는 행만 필터링
+            title = cols[1].get_text(strip=True)
             if "중식" not in title:
                 continue
-            # ']' 이후 또는 '중식' 이후 텍스트 추출
             content = title.split(']')[-1] if ']' in title else title.split('중식')[-1]
-            # 콤마 또는 중점 구분자로 분리
             items = [i.strip() for i in re.split('[,·]', content) if i.strip()]
             for item in items:
-                # 괄호 제거 후 순수 한글 메뉴명
                 clean = re.sub(r"\([^)]*\)", "", item).strip()
-                # 한글만, 길이 2~10
                 if re.fullmatch(r"[가-힣]{2,10}", clean):
                     dishes.add(clean)
-    except Exception:
+    except:
         pass
+    if not dishes:
+        # fallback to default menu
+        fallback = [
+            "현미밥","백미밥","김치찌개","된장찌개","미역국",
+            "불고기","제육볶음","잡채","두부조림","계란찜",
+            "카레라이스","깍두기","생선구이","샐러드","닭강정"
+        ]
+        return fallback
     return sorted(dishes)
 
 menu_names = load_menu()
-if not menu_names:
-    st.error("급식 메뉴를 불러오지 못했습니다. 나중에 다시 시도해주세요.")
-    st.stop()
 
 # 3) 영양 정보 추정
 def estimate_nutrition(name: str) -> dict:
@@ -87,7 +86,7 @@ menu_list = [estimate_nutrition(n) for n in menu_names]
 
 # 4) 추천 실행
 if st.button("식단 추천 실행"):
-    # BMI · 목표 BMI=22 · 목표 체중 · TDEE · 소요 기간 계산
+    # BMI · 목표 BMI=22 · 목표 체중 · TDEE · 기간 계산
     bmi = weight/((height/100)**2)
     target_bmi = 22.0
     target_weight = target_bmi * ((height/100)**2)
@@ -163,6 +162,6 @@ if st.button("식단 추천 실행"):
         for tt, it in symptom_map.get(s, []): st.write(f"{tt} → {it}")
     st.markdown("### ⏰ 연령별 권장 영양소")
     if age < 20: age_map = [("08:00","칼슘 500mg"),("20:00","비타민 D 10µg")]
-    elif age < 50: age_map = [("09:00","비타민 D 10µg")]
+    elif age < 50: age_map = [("09:00","비타민 D 10µg")] 
     else: age_map = [("08:00","칼슘 500mg"),("21:00","비타민 D 20µg")] 
     for tt, it in age_map: st.write(f"{tt} → {it}")
