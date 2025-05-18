@@ -35,51 +35,88 @@ symptoms = st.multiselect("현재 증상", symptom_options)
 
 # 메뉴 로드: HWP 파일 우선, 없다면 웹 파싱
 @st.cache_data
-def load_menu():
-    dishes = set()
-    # HWP 파싱
-    for path in glob.glob("*.hwp"):
-        try:
-            raw = open(path, 'rb').read()
-            text = raw.decode('utf-8', errors='ignore')
-            items = re.findall(r'[가-힣]{2,10}', text)
-            for item in items:
-                if item in ['급식','중식','조식','석식','메뉴','식단','학년도','월','식단표']:
-                    continue
-                dishes.add(item)
-        except:
-            continue
-    if dishes:
-        return sorted(dishes)
-    # 웹 파싱
-    try:
-        url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
-        session = requests.Session()
-        session.headers.update({'User-Agent':'Mozilla/5.0'})
-        res = session.get(url, timeout=5)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for tr in soup.select('table.boardList tbody tr, table.tableList tbody tr'):
-            tds = tr.select('td')
-            if len(tds) < 2:
-                continue
-            a = tds[1].find('a')
-            if not a or '중식' not in a.text:
-                continue
-            href = a.get('href')
-            detail = href if href.startswith('http') else f"https://djhs.djsch.kr{href}"
-            dr = session.get(detail, timeout=5)
-            ds = BeautifulSoup(dr.text, 'html.parser')
-            content = ds.select_one('div.board_conts, div.boardContents, td.board_txt')
-            txt = content.get_text(separator=',') if content else ''
-            for part in re.split('[,·]', txt):
-                it = re.sub(r"\([^)]*\)", '', part).strip()
-                if re.fullmatch(r'[가-힣 ]{2,10}', it):
-                    dishes.add(it)
-    except:
-        pass
-    return sorted(dishes)
+"
+"def load_menu():
+"
+"    url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
+"
+"    dishes = set()
+"
+"    try:
+"
+"        session = requests.Session()
+"
+"        session.headers.update({'User-Agent':'Mozilla/5.0'})
+"
+"        res = session.get(url, timeout=10)
+"
+"        res.raise_for_status()
+"
+"        soup = BeautifulSoup(res.text, 'html.parser')
+"
+"        # 각 게시물 제목에서 중식 메뉴 추출
+"
+"        for td in soup.select('table.boardList tbody tr td.title, table.tableList tbody tr td.title'):
+"
+"            text = td.get_text(strip=True)
+            # '[중식]' 혹은 '중식]' 포함
+            if '중식' not in text:
+"
+"                continue
+"
+"            # ']' 이후 텍스트 추출
+"
+"            parts = text.split(']')
+"
+"            menu_str = parts[-1] if len(parts)>1 else text
+"
+"            # 콤마로 분리
+"
+"            items = [itm.strip() for itm in menu_str.split(',') if itm.strip()]
+"
+"            for item in items:
+"
+"                # 괄호 제거
+"
+"                clean = re.sub(r"\([^)]*\)", '', item).strip()
+"
+"                # 한글 메뉴명만
+"
+"                if re.fullmatch(r'[가-힣 ]{2,15}', clean):
+"
+"                    dishes.add(clean)
+"
+"    except Exception as e:
+"
+"        st.warning(f"급식 메뉴를 웹에서 불러오지 못했습니다: {e}")
+"
+"    # HWP 파일 우선
+"
+"    if not dishes:
+"
+"        for path in glob.glob("*.hwp"):
+"
+"            try:
+"
+"                raw = open(path, 'rb').read()
+"
+"                text = raw.decode('utf-8', errors='ignore')
+"
+"                for item in re.findall(r'[가-힣]{2,10}', text):
+"
+"                    if item in ['급식','중식','조식','석식','메뉴','식단','학년도','월','식단표']:
+"
+"                        continue
+"
+"                    dishes.add(item)
+"
+"            except:
+"
+"                continue
+"
+"    return sorted(dishes)
 
-menu_names = load_menu()
+menu_names = load_menu()()
 if not menu_names:
     st.error("급식 메뉴를 불러오지 못했습니다. HWP 파일 또는 네트워크를 확인해주세요.")
     st.stop()
