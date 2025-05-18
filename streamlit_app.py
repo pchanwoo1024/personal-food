@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import random
 import numpy as np
 import re
+from datetime import datetime, timedelta, time as dtime
 from itertools import combinations
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
@@ -13,12 +14,14 @@ st.set_page_config(page_title="개인 맞춤 영양 식단 추천 (대전고 급
 st.title("🍽️ AI 기반 개인 맞춤 영양 식단 추천 (대전고 3~5월 급식)")
 
 # 1) 사용자 입력
-name    = st.text_input("이름")
-sex     = st.selectbox("성별", ["M", "F"])
-age     = st.slider("나이", 10, 80, 18)
-height  = st.slider("키 (cm)", 140, 200, 170)
-weight  = st.slider("몸무게 (kg)", 40, 120, 60)
-activity= st.slider("활동량 (1.0~5.0)", 1.0, 5.0, 3.0, 0.1)
+name      = st.text_input("이름")
+sex       = st.selectbox("성별", ["M", "F"])
+age       = st.slider("나이", 10, 80, 18)
+height    = st.slider("키 (cm)", 140, 200, 170)
+weight    = st.slider("몸무게 (kg)", 40, 120, 60)
+activity  = st.slider("활동량 (1.0~5.0)", 1.0, 5.0, 3.0, 0.1)
+wake_time = st.time_input("기상 시간", value=dtime(7,0))
+sleep_time = st.time_input("취침 시간", value=dtime(22,0))
 
 allergy_options = [
     "난류","우유","메밀","땅콩","대두","밀",
@@ -34,143 +37,125 @@ symptom_options = [
 ]
 symptoms = st.multiselect("현재 증상", symptom_options)
 
-# 2) 대전고 공식 게시판에서 급식 메뉴 파싱
+# 2) 급식 메뉴 파싱 (대전고 공식 게시판)
 @st.cache_data
 def load_menu():
-    base_list_url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
+    list_url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
     dishes = set()
     try:
-        r = requests.get(base_list_url, timeout=5)
+        r = requests.get(list_url, timeout=5)
         soup = BeautifulSoup(r.text, "html.parser")
-        # 게시판 리스트에서 중식 링크만 추출
         for tr in soup.select("table.tableList tbody tr, table.boardList tbody tr"):
             tds = tr.select("td")
-            if len(tds) < 2:
-                continue
+            if len(tds) < 2: continue
             a = tds[1].find('a')
-            if not a or '중식' not in a.get_text():
-                continue
+            if not a or '중식' not in a.text: continue
             href = a['href']
-            detail_url = href if href.startswith('http') else f"https://djhs.djsch.kr{href}"
-            try:
-                dr = requests.get(detail_url, timeout=5)
-                dsoup = BeautifulSoup(dr.text, "html.parser")
-                # 상세 내용 영역 탐색
-                content = dsoup.select_one("div.board_conts, div.boardContents, td.board_txt")
-                text = content.get_text(separator=",") if content else ''
-                # 콤마·중점 구분
-                for part in re.split('[,·]', text):
-                    item = re.sub(r"\([^)]*\)", "", part).strip()
-                    # 순수 한글, 메뉴명 길이 제한
-                    if re.fullmatch(r"[가-힣 ]{2,10}", item):
-                        dishes.add(item)
-            except:
-                continue
+            detail = f"https://djhs.djsch.kr{href}" if not href.startswith('http') else href
+            dr = requests.get(detail, timeout=5)
+            dsoup = BeautifulSoup(dr.text, "html.parser")
+            content = dsoup.select_one("div.board_conts, div.boardContents, td.board_txt")
+            text = content.get_text(separator=",") if content else ''
+            for part in re.split('[,·]', text):
+                item = re.sub(r"\([^)]*\)", "", part).strip()
+                if re.fullmatch(r"[가-힣 ]{2,10}", item): dishes.add(item)
     except:
         pass
-    # fallback 기본 메뉴 (실패 시)
     if not dishes:
-        return [
-            "현미밥","백미밥","김치찌개","된장찌개","미역국",
-            "불고기","제육볶음","잡채","두부조림","계란찜",
-            "카레라이스","깍두기","생선구이","샐러드","닭강정"
-        ]
+        # fallback 메뉴
+        dishes = {"현미밥","백미밥","김치찌개","된장찌개","미역국",
+                  "불고기","제육볶음","잡채","두부조림","계란찜",
+                  "카레라이스","깍두기","생선구이","샐러드","닭강정"}
     return sorted(dishes)
 
 menu_names = load_menu()
+menu_list = []
+def estimate_nutrition(name):
+    if any(x in name for x in ["밥","죽"]): kcal=300
+    elif any(x in name for x in ["국","찌개","탕"]): kcal=80
+    elif any(x in name for x in ["볶음","조림","구이","스테이크"]): kcal=250
+    elif any(x in name for x in ["전","만두","피자","파스타","면","떡볶이"]): kcal=200
+    else: kcal=180
+    fat=kcal*0.2; prot=kcal*0.15; carb=kcal-fat-prot
+    return {"name":name, "kcal":int(kcal), "carb":int(carb), "protein":int(prot), "fat":int(fat)}
+for n in menu_names: menu_list.append(estimate_nutrition(n))
 
-# 3) 영양 정보 추정
-def estimate_nutrition(name: str) -> dict:
-    if any(x in name for x in ["밥","죽"]): kcal = 300
-    elif any(x in name for x in ["국","찌개","탕"]): kcal = 80
-    elif any(x in name for x in ["볶음","조림","구이","스테이크"]): kcal = 250
-    elif any(x in name for x in ["전","만두","피자","파스타","면","떡볶이"]): kcal = 200
-    else: kcal = 180
-    fat  = kcal * 0.2
-    prot = kcal * 0.15
-    carb = kcal - fat - prot
-    return {"name": name, "kcal": int(kcal), "carb": int(carb), "protein": int(prot), "fat": int(fat)}
-
-menu_list = [estimate_nutrition(n) for n in menu_names]
-
-# 4) 추천 실행
+# 3) 추천 실행
 if st.button("식단 추천 실행"):
-    # BMI · 목표 BMI=22 · 목표 체중 · TDEE · 기간 계산
+    # BMI, 목표, TDEE 계산
     bmi = weight/((height/100)**2)
-    target_bmi = 22.0
-    target_weight = target_bmi * ((height/100)**2)
-    weeks = abs((target_weight - weight) * 7700 / 500) / 7
-    if sex == "M": bmr = 10*weight + 6.25*height -5*age +5
-    else:          bmr = 10*weight + 6.25*height -5*age -161
-    tdee = bmr * (1.2 + (activity-1)*0.15)
+    tgt_bmi=22.0; tgt_w=tgt_bmi*((height/100)**2)
+    weeks=abs((tgt_w-weight)*7700/500)/7
+    bmr = 10*weight+6.25*height-5*age+ (5 if sex=='M' else -161)
+    tdee = bmr*(1.2+(activity-1)*0.15)
 
-    # 알레르기 필터링
-    filtered = menu_list.copy()
-    if allergies:
-        filtered = [m for m in filtered if not any(a in m["name"] for a in allergies)]
-    if not filtered:
-        st.warning("알레르기 조건에 맞는 메뉴가 없습니다.")
-        st.stop()
+    # 알레르기 필터
+    filt = [m for m in menu_list if not any(a in m['name'] for a in allergies)] if allergies else menu_list.copy()
+    if not filt: st.warning("알레르기 맞는 메뉴 없음"); st.stop()
 
-    # 5) 3개 조합 및 라벨링
-    combos = list(combinations(filtered, 3))
-    X, y = [], []
+    # 조합 생성
+    combos=list(combinations(filt,3))
+    X=[]; y=[]
     for combo in combos:
-        k = sum(i["kcal"] for i in combo)
-        c = sum(i["carb"] for i in combo)
-        p = sum(i["protein"] for i in combo)
-        f = sum(i["fat"] for i in combo)
-        X.append([bmi, age, activity, k, c, p, f])
-        total = c + p + f + 1e-6
-        p_ratio = p / total
-        ideal_p = 0.2 + (activity-1)*0.05
-        p_score = max(0, 1 - abs(p_ratio - ideal_p))
-        k_score = max(0, 1 - abs(k - tdee/3) / (tdee/3))
-        y.append(1 if 0.6 * k_score + 0.4 * p_score >= 0.5 else 0)
+        k=sum(i['kcal'] for i in combo)
+        c=sum(i['carb'] for i in combo)
+        p=sum(i['protein'] for i in combo)
+        f=sum(i['fat'] for i in combo)
+        X.append([bmi,age,activity,k,c,p,f])
+        tot=c+p+f+1e-6; pr=p/tot; ip=0.2+(activity-1)*0.05
+        ps=max(0,1-abs(pr-ip)); ks=max(0,1-abs(k-tdee/3)/(tdee/3))
+        y.append(1 if 0.6*ks+0.4*ps>=0.5 else 0)
 
-    # 6) 모델 학습
-    clf = None
-    if len(set(y)) > 1:
-        clf = Pipeline([
-            ("scaler", StandardScaler()),
-            ("model", RandomForestClassifier(n_estimators=100, random_state=42))
-        ])
-        clf.fit(X, y)
+    # 모델 학습
+    clf=None
+    if len(set(y))>1:
+        clf=Pipeline([('s',StandardScaler()),('m',RandomForestClassifier(n_estimators=100,random_state=42))])
+        clf.fit(X,y)
 
-    # 7) 평가 및 추천
-    recs = []
-    for xi, combo in zip(X, combos):
+    # 평가 및 비중
+    recs=[]
+    for xi,combo in zip(X,combos):
         if clf:
-            proba = clf.predict_proba([xi])[0]
-            score = proba[1] if len(proba) > 1 else 0.0
+            p=clf.predict_proba([xi])[0]; score=p[1] if len(p)>1 else 0
         else:
-            k = xi[3]; p = xi[5]
-            total = xi[4] + p + xi[6] + 1e-6
-            p_ratio = p / total
-            ideal_p = 0.2 + (activity-1)*0.05
-            p_score = max(0, 1 - abs(p_ratio - ideal_p))
-            k_score = max(0, 1 - abs(k - tdee/3) / (tdee/3))
-            score = 0.6 * k_score + 0.4 * p_score
-        recs.append((combo, score))
+            k=xi[3]; p=xi[5]; tot=xi[4]+p+xi[6]+1e-6; pr=p/tot; ip=0.2+(activity-1)*0.05
+            ps=max(0,1-abs(pr-ip)); ks=max(0,1-abs(k-tdee/3)/(tdee/3)); score=0.6*ks+0.4*ps
+        recs.append((combo,score))
 
-    # 8) 상위 3개 출력
-    top3 = sorted(recs, key=lambda x: x[1], reverse=True)[:3]
-    times = ["07:30 아침", "12:30 점심", "18:30 저녁"]
+    # 중복 없는 상위 3개 선택
+    selected=[]; used=set()
+    for combo,score in sorted(recs,key=lambda x:x[1],reverse=True):
+        names=[i['name'] for i in combo]
+        if any(n in used for n in names): continue
+        selected.append((combo,score)); used.update(names)
+        if len(selected)==3: break
 
+    # 식사 시간 계산
+    today=datetime.today()
+    wake_dt=datetime.combine(today, wake_time)
+    sleep_dt=datetime.combine(today, sleep_time)
+    if sleep_dt<=wake_dt: sleep_dt+=timedelta(days=1)
+    awake=sleep_dt-wake_dt
+    b_time=wake_dt+timedelta(hours=1)
+    l_time=wake_dt+awake/2
+    d_time=sleep_dt-timedelta(hours=1)
+    slots=[b_time,l_time,d_time]
+
+    # 출력
     st.subheader(f"{name}님 맞춤 결과")
-    st.write(f"- 현재 BMI: {bmi:.2f} | 목표 BMI: {target_bmi} | 목표 체중: {target_weight:.1f}kg")
+    st.write(f"- 현재 BMI: {bmi:.2f} | 목표 BMI: {tgt_bmi} | 목표 체중: {tgt_w:.1f}kg")
     st.write(f"- TDEE: {tdee:.0f} kcal | 예상 소요: {weeks:.1f}주")
     st.markdown("### 🍽️ 하루 식단 추천")
-    for (combo, score), t in zip(top3, times):
-        names = " + ".join(i["name"] for i in combo)
-        kc = sum(i["kcal"] for i in combo)
-        st.write(f"{t} → **{names}** ({kc} kcal, 적합도 {score:.2f})")
+    for (combo,score), t in zip(selected, slots):
+        items=" + ".join(i['name'] for i in combo)
+        kc=sum(i['kcal'] for i in combo)
+        st.write(f"{t.strftime('%H:%M')} → **{items}** ({kc} kcal, 적합도 {score:.2f})")
     st.markdown("### ⏰ 증상별 영양소 일정")
-    symptom_map = {"눈떨림": [("10:00","마그네슘 300mg")], "피로": [("09:00","비타민 B2 1.4mg")]}
+    smap={"눈떨림":[("10:00","마그네슘 300mg")],"피로":[("09:00","비타민 B2 1.4mg")]}
     for s in symptoms:
-        for tt, it in symptom_map.get(s, []): st.write(f"{tt} → {it}")
+        for tt,it in smap.get(s,[]): st.write(f"{tt} → {it}")
     st.markdown("### ⏰ 연령별 권장 영양소")
-    if age < 20: age_map = [("08:00","칼슘 500mg"),("20:00","비타민 D 10µg")]
-    elif age < 50: age_map = [("09:00","비타민 D 10µg")] 
-    else: age_map = [("08:00","칼슘 500mg"),("21:00","비타민 D 20µg")] 
-    for tt, it in age_map: st.write(f"{tt} → {it}")
+    if age<20: amap=[("08:00","칼슘 500mg"),("20:00","비타민 D 10µg")]
+    elif age<50: amap=[("09:00","비타민 D 10µg")]
+    else: amap=[("08:00","칼슘 500mg"),("21:00","비타민 D 20µg")]
+    for tt,it in amap: st.write(f"{tt} → {it}")
