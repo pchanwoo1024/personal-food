@@ -41,7 +41,7 @@ symptoms = st.multiselect("현재 증상", symptom_options)
 def load_menu():
     dishes = set()
     # 1) HWP 파싱 (CP949/UTF-16LE 시도)
-    for path in glob.glob("*.hwp"):
+    for path in glob.glob("/mnt/data/*.hwp"):
         try:
             raw = open(path, 'rb').read()
             try:
