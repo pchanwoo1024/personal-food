@@ -30,100 +30,62 @@ allergy_options = [
 ]
 allergies = st.multiselect("알레르기 (복수 선택)", allergy_options)
 
-symptom_options = ["눈떨림","피로","두통","근육경련","탈모","불면증","집중력저하","손발저림"]
+symptom_options = [
+    "눈떨림","피로","두통","근육경련",
+    "탈모","불면증","집중력저하","손발저림"
+]
 symptoms = st.multiselect("현재 증상", symptom_options)
 
 # 메뉴 로드: HWP 파일 우선, 없다면 웹 파싱
 @st.cache_data
-"
-"def load_menu():
-"
-"    url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
-"
-"    dishes = set()
-"
-"    try:
-"
-"        session = requests.Session()
-"
-"        session.headers.update({'User-Agent':'Mozilla/5.0'})
-"
-"        res = session.get(url, timeout=10)
-"
-"        res.raise_for_status()
-"
-"        soup = BeautifulSoup(res.text, 'html.parser')
-"
-"        # 각 게시물 제목에서 중식 메뉴 추출
-"
-"        for td in soup.select('table.boardList tbody tr td.title, table.tableList tbody tr td.title'):
-"
-"            text = td.get_text(strip=True)
-            # '[중식]' 혹은 '중식]' 포함
+def load_menu():
+    dishes = set()
+    # HWP 파싱
+    for path in glob.glob("*.hwp"):
+        try:
+            raw = open(path, 'rb').read()
+            text = raw.decode('utf-8', errors='ignore')
+            items = re.findall(r'[가-힣]{2,10}', text)
+            for item in items:
+                if item in ['급식','중식','조식','석식','메뉴','식단','학년도','월','식단표']:
+                    continue
+                dishes.add(item)
+        except:
+            continue
+    if dishes:
+        return sorted(dishes)
+    # 웹 파싱
+    try:
+        url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
+        session = requests.Session()
+        session.headers.update({'User-Agent':'Mozilla/5.0'})
+        res = session.get(url, timeout=10)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, 'html.parser')
+        for td in soup.select('table.boardList tbody tr td.title, table.tableList tbody tr td.title'):
+            text = td.get_text(strip=True)
             if '중식' not in text:
-"
-"                continue
-"
-"            # ']' 이후 텍스트 추출
-"
-"            parts = text.split(']')
-"
-"            menu_str = parts[-1] if len(parts)>1 else text
-"
-"            # 콤마로 분리
-"
-"            items = [itm.strip() for itm in menu_str.split(',') if itm.strip()]
-"
-"            for item in items:
-"
-"                # 괄호 제거
-"
-"                clean = re.sub(r"\([^)]*\)", '', item).strip()
-"
-"                # 한글 메뉴명만
-"
-"                if re.fullmatch(r'[가-힣 ]{2,15}', clean):
-"
-"                    dishes.add(clean)
-"
-"    except Exception as e:
-"
-"        st.warning(f"급식 메뉴를 웹에서 불러오지 못했습니다: {e}")
-"
-"    # HWP 파일 우선
-"
-"    if not dishes:
-"
-"        for path in glob.glob("*.hwp"):
-"
-"            try:
-"
-"                raw = open(path, 'rb').read()
-"
-"                text = raw.decode('utf-8', errors='ignore')
-"
-"                for item in re.findall(r'[가-힣]{2,10}', text):
-"
-"                    if item in ['급식','중식','조식','석식','메뉴','식단','학년도','월','식단표']:
-"
-"                        continue
-"
-"                    dishes.add(item)
-"
-"            except:
-"
-"                continue
-"
-"    return sorted(dishes)
+                continue
+            parts = text.split(']')
+            menu_str = parts[-1] if len(parts) > 1 else text
+            items = [itm.strip() for itm in menu_str.split(',') if itm.strip()]
+            for item in items:
+                clean = re.sub(r"\([^)]*\)", '', item).strip()
+                if re.fullmatch(r'[가-힣 ]{2,15}', clean):
+                    dishes.add(clean)
+    except Exception as e:
+        st.warning(f"급식 메뉴를 웹에서 불러오지 못했습니다: {e}")
+    return sorted(dishes)
 
-menu_names = load_menu()()
+menu_names = load_menu()
 if not menu_names:
     st.error("급식 메뉴를 불러오지 못했습니다. HWP 파일 또는 네트워크를 확인해주세요.")
     st.stop()
+# 디버그: 로드된 메뉴
 st.write(f"🔎 로드된 메뉴 ({len(menu_names)}개)", menu_names)
 
 # 영양 정보 추정 함수
-def est(name):
+def est(name: str) -> dict:
     if '밥' in name or '죽' in name:
         kcal = 300
     elif any(x in name for x in ['국','찌개','탕']):
@@ -204,31 +166,26 @@ if st.button('식단 추천 실행'):
         if len(selected) == 3:
             break
 
-    #  식사 시간: 문헌 기반 고정 시간
-    # 아침: 기상 후 최소 30분, 최대 2시간 내
+    # 식사 시간: 문헌 기반 고정 시간
     b_earliest = (datetime.combine(datetime.today(), wake_time) + timedelta(minutes=30)).time()
-    b_latest   = (datetime.combine(datetime.today(), wake_time) + timedelta(hours=2)).time()
-    # 점심: 12:00~13:00
-    l_time     = dtime(12,30)
-    # 저녁: 18:00~19:00
-    d_time     = dtime(18,30)
-    slots = [b_earliest, l_time, d_time]
+    lunch_time = dtime(12,30)
+    dinner_time= dtime(18,30)
 
-    # 출력
     st.subheader(f"{name}님 맞춤 결과")
     st.write(f"- BMI: {bmi:.2f} | 목표 BMI: {target_bmi} | 목표 체중: {target_weight:.1f}kg")
     st.write(f"- TDEE: {tdee:.0f} kcal | 예상 소요: {weeks:.1f}주")
     st.markdown('### 🍽️ 하루 식단 추천')
-    for (combo, score), meal_time in zip(selected, slots):
+    for (combo, score), meal_time in zip(selected, [b_earliest, lunch_time, dinner_time]):
         items = ' + '.join(i['name'] for i in combo)
         kc = sum(i['kcal'] for i in combo)
         st.write(f"{meal_time.strftime('%H:%M')} → **{items}** ({kc} kcal, 적합도 {score:.2f})")
 
     st.markdown('### ⏰ 증상별 영양소 일정')
-    smap = {'눈떨림':[('10:00','마그네슘 300mg')],'피로':[('09:00','비타민 B2 1.4mg')]}
+    smap = {'눈떨림':[('10:00','마그네슘 300mg')],'피로':[('09:00','비타민 B2 1.4mg')]}    
     for s in symptoms:
         for tt, it in smap.get(s, []):
             st.write(f"{tt} → {it}")
+
     st.markdown('### ⏰ 연령별 권장 영양소')
     if age < 20:
         amap = [('08:00','칼슘 500mg'),('20:00','비타민 D 10µg')]
