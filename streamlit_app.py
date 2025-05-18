@@ -39,34 +39,81 @@ symptoms = st.multiselect("현재 증상", symptom_options)
 
 # 2) 급식 메뉴 파싱 (대전고 공식 게시판)
 @st.cache_data
-def load_menu():
-    list_url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
-    dishes = set()
-    try:
-        r = requests.get(list_url, timeout=5)
-        soup = BeautifulSoup(r.text, "html.parser")
-        # 링크 찾기
-        for tr in soup.select("table.tableList tbody tr, table.boardList tbody tr"):
-            tds = tr.select("td")
-            if len(tds) < 2: continue
-            a = tds[1].find('a')
-            if not a or '중식' not in a.text: continue
-            href = a['href']
-            detail_url = href if href.startswith('http') else f"https://djhs.djsch.kr{href}"
-            dr = requests.get(detail_url, timeout=5)
-            dsoup = BeautifulSoup(dr.text, "html.parser")
-            content = dsoup.select_one("div.board_conts, div.boardContents, td.board_txt")
-            text = content.get_text(separator=",") if content else ''
-            # 파싱
-            for part in re.split('[,·]', text):
-                item = re.sub(r"\([^)]*\)", "", part).strip()
-                if re.fullmatch(r"[가-힣 ]{2,10}", item):
-                    dishes.add(item)
-    except:
-        pass
-    return sorted(dishes)
+"
+"def load_menu():
+"
+"    list_url = "https://djhs.djsch.kr/boardCnts/list.do?boardID=41832&m=020701&s=daejeon"
+"
+"    dishes = set()
+"
+"    session = requests.Session()
+"
+"    session.headers.update({'User-Agent':'Mozilla/5.0'})
+"
+"    try:
+"
+"        r = session.get(list_url, timeout=5)
+"
+"        r.raise_for_status()
+"
+"        soup = BeautifulSoup(r.text, "html.parser")
+"
+"        # 게시판 목록
+"
+"        rows = soup.select("table.boardList tbody tr, table.tableList tbody tr")
+"
+"        for tr in rows:
+"
+"            tds = tr.select("td")
+"
+"            if len(tds) < 2:
+"
+"                continue
+"
+"            link = tds[1].find('a')
+"
+"            if not link or '중식' not in link.text:
+"
+"                continue
+"
+"            href = link.get('href')
+"
+"            detail_url = href if href.startswith('http') else f"https://djhs.djsch.kr{href}"
+"
+"            try:
+"
+"                dr = session.get(detail_url, timeout=5)
+"
+"                dr.raise_for_status()
+"
+"                dsoup = BeautifulSoup(dr.text, "html.parser")
+"
+"                content = dsoup.select_one("div.board_conts, div.boardContents, td.board_txt")
+"
+"                text = content.get_text(separator=",") if content else ''
+"
+"                for part in re.split('[,·]', text):
+"
+"                    item = re.sub(r"\([^)]*\)", "", part).strip()
+"
+"                    if re.fullmatch(r"[가-힣 ]{2,10}", item):
+"
+"                        dishes.add(item)
+"
+"            except:
+"
+"                continue
+"
+"    except Exception as e:
+"
+"        st.error(f"급식 목록을 불러오는 중 오류 발생: {e}")
+"
+"        return []
+"
+"    return sorted(dishes)
 
-menu_names = load_menu()
+"
+"menu_names = load_menu()()
 if not menu_names:
     st.error("급식 메뉴를 불러오지 못했습니다. 서버 과부하일 수 있습니다.")
     st.stop()
