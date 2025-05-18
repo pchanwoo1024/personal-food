@@ -83,7 +83,7 @@ def load_menu():
         st.warning(f"웹에서 급식 메뉴를 불러오지 못했습니다: {e}")
     return sorted(dishes)
 
-menu_names = load_menu()()
+menu_names = load_menu()
 if not menu_names:
     st.error("급식 메뉴를 불러오지 못했습니다. HWP 파일 또는 네트워크를 확인해주세요.")
     st.stop()
